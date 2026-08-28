@@ -1,1 +1,424 @@
+blueprint:
+  name: IKEA BILRESA E2489 - Zigbee2MQTT Light Control
+  description: >
+    Contrôle complet d'une télécommande IKEA BILRESA E2489 via Zigbee2MQTT.
+    ON/OFF, double appui avec changement de couleur et variation cyclique
+    de la luminosité et de la température de couleur.
+  domain: automation
+  author: Nicolas
 
+  input:
+
+    remote_device:
+      name: Télécommande BILRESA
+      description: Télécommande IKEA BILRESA E2489
+      selector:
+        device:
+          integration: mqtt
+          manufacturer: IKEA
+          model: "BILRESA remote control with buttons (Matter)"
+
+    target_light:
+      name: Lumière
+      description: Lumière à contrôler
+      selector:
+        target:
+          entity:
+            domain: light
+
+    color_helper:
+      name: Sélecteur de couleur
+      description: >
+        Input Select contenant exactement :
+        Blanc, Rouge, Vert, Bleu, Violet.
+      selector:
+        entity:
+          domain: input_select
+
+    brightness_step:
+      name: Pas de luminosité
+      description: Variation de luminosité à chaque étape.
+      default: 5
+      selector:
+        number:
+          min: 1
+          max: 20
+          step: 1
+          unit_of_measurement: "%"
+
+    color_temp_step:
+      name: Pas de température de couleur
+      description: Variation de température à chaque étape.
+      default: 100
+      selector:
+        number:
+          min: 50
+          max: 500
+          step: 50
+          unit_of_measurement: K
+
+    transition_speed:
+      name: Vitesse de variation
+      description: >
+        Durée de chaque transition.
+      default: 0.3
+      selector:
+        number:
+          min: 0.1
+          max: 2
+          step: 0.1
+          unit_of_measurement: s
+
+    min_color_temp:
+      name: Température minimum
+      description: Température la plus chaude.
+      default: 2700
+      selector:
+        number:
+          min: 2000
+          max: 4000
+          step: 100
+          unit_of_measurement: K
+
+    max_color_temp:
+      name: Température maximum
+      description: Température la plus froide.
+      default: 6500
+      selector:
+        number:
+          min: 4000
+          max: 6500
+          step: 100
+          unit_of_measurement: K
+
+
+mode: restart
+max_exceeded: silent
+
+
+triggers:
+
+  # ==========================================
+  # ON
+  # ==========================================
+  - trigger: device
+    domain: mqtt
+    device_id: !input remote_device
+    type: action
+    subtype: "on"
+    id: "on"
+
+  # ==========================================
+  # OFF
+  # ==========================================
+  - trigger: device
+    domain: mqtt
+    device_id: !input remote_device
+    type: action
+    subtype: "off"
+    id: "off"
+
+  # ==========================================
+  # DOUBLE ON
+  # ==========================================
+  - trigger: device
+    domain: mqtt
+    device_id: !input remote_device
+    type: action
+    subtype: "on_double"
+    id: "on_double"
+
+  # ==========================================
+  # DOUBLE OFF
+  # ==========================================
+  - trigger: device
+    domain: mqtt
+    device_id: !input remote_device
+    type: action
+    subtype: "off_double"
+    id: "off_double"
+
+  # ==========================================
+  # LUMINOSITÉ
+  # ==========================================
+  - trigger: device
+    domain: mqtt
+    device_id: !input remote_device
+    type: action
+    subtype: "brightness_move_up"
+    id: "brightness"
+
+  # ==========================================
+  # TEMPÉRATURE DE COULEUR
+  # ==========================================
+  - trigger: device
+    domain: mqtt
+    device_id: !input remote_device
+    type: action
+    subtype: "brightness_move_down"
+    id: "color_temp"
+
+  # ==========================================
+  # ARRÊT
+  # ==========================================
+  - trigger: device
+    domain: mqtt
+    device_id: !input remote_device
+    type: action
+    subtype: "brightness_stop"
+    id: "stop"
+
+
+conditions: []
+
+
+actions:
+
+  - variables:
+      brightness_step_value: !input brightness_step
+      color_temp_step_value: !input color_temp_step
+      transition: !input transition_speed
+      min_temp: !input min_color_temp
+      max_temp: !input max_color_temp
+
+
+  - choose:
+
+      # ==================================================
+      # ON
+      # ==================================================
+      - conditions:
+          - condition: trigger
+            id: "on"
+        sequence:
+          - action: light.turn_on
+            target: !input target_light
+
+
+      # ==================================================
+      # OFF
+      # ==================================================
+      - conditions:
+          - condition: trigger
+            id: "off"
+        sequence:
+          - action: light.turn_off
+            target: !input target_light
+
+
+      # ==================================================
+      # DOUBLE ON
+      # Blanc → Rouge → Vert → Bleu → Violet → Blanc
+      # ==================================================
+      - conditions:
+          - condition: trigger
+            id: "on_double"
+        sequence:
+
+          - variables:
+              couleurs:
+                Blanc: [255, 255, 255]
+                Rouge: [255, 0, 0]
+                Vert: [0, 255, 0]
+                Bleu: [0, 0, 255]
+                Violet: [128, 0, 255]
+
+              liste_couleurs:
+                - Blanc
+                - Rouge
+                - Vert
+                - Bleu
+                - Violet
+
+          - variables:
+              couleur_actuelle: >
+                {{ states(color_helper) }}
+
+              index_actuel: >
+                {{ liste_couleurs.index(couleur_actuelle) }}
+
+              prochaine_couleur: >
+                {{ liste_couleurs[
+                  (index_actuel + 1) % (liste_couleurs | length)
+                ] }}
+
+          - action: input_select.select_option
+            target:
+              entity_id: !input color_helper
+            data:
+              option: "{{ prochaine_couleur }}"
+
+          - choose:
+
+              - conditions:
+                  - condition: template
+                    value_template: "{{ prochaine_couleur == 'Blanc' }}"
+                sequence:
+                  - action: light.turn_on
+                    target: !input target_light
+                    data:
+                      color_temp_kelvin: 2700
+
+              - conditions:
+                  - condition: template
+                    value_template: "{{ prochaine_couleur == 'Rouge' }}"
+                sequence:
+                  - action: light.turn_on
+                    target: !input target_light
+                    data:
+                      rgb_color: [255, 0, 0]
+
+              - conditions:
+                  - condition: template
+                    value_template: "{{ prochaine_couleur == 'Vert' }}"
+                sequence:
+                  - action: light.turn_on
+                    target: !input target_light
+                    data:
+                      rgb_color: [0, 255, 0]
+
+              - conditions:
+                  - condition: template
+                    value_template: "{{ prochaine_couleur == 'Bleu' }}"
+                sequence:
+                  - action: light.turn_on
+                    target: !input target_light
+                    data:
+                      rgb_color: [0, 0, 255]
+
+              - conditions:
+                  - condition: template
+                    value_template: "{{ prochaine_couleur == 'Violet' }}"
+                sequence:
+                  - action: light.turn_on
+                    target: !input target_light
+                    data:
+                      rgb_color: [128, 0, 255]
+
+
+      # ==================================================
+      # DOUBLE OFF
+      # ==================================================
+      - conditions:
+          - condition: trigger
+            id: "off_double"
+        sequence:
+          - action: light.turn_off
+            target: !input target_light
+
+
+      # ==================================================
+      # BRIGHTNESS
+      #
+      # 0 → 100 → 0 → 100 → ...
+      # ==================================================
+      - conditions:
+          - condition: trigger
+            id: "brightness"
+        sequence:
+
+          - variables:
+              current_brightness: >
+                {{ state_attr(target_light, 'brightness') | int(1) }}
+
+              direction: 1
+
+          - repeat:
+
+              while:
+                - condition: template
+                  value_template: "{{ true }}"
+
+              sequence:
+
+                - variables:
+                    next_brightness: >
+                      {% set current = state_attr(target_light, 'brightness') | int(1) %}
+                      {% set value = current + (brightness_step_value * direction) %}
+                      {{ [value, 0] | max | min(255) }}
+
+                - action: light.turn_on
+                  target: !input target_light
+                  data:
+                    brightness: "{{ next_brightness }}"
+                    transition: "{{ transition }}"
+
+                - if:
+                    - condition: template
+                      value_template: "{{ next_brightness >= 255 }}"
+                  then:
+                    - variables:
+                        direction: -1
+
+                - if:
+                    - condition: template
+                      value_template: "{{ next_brightness <= 0 }}"
+                  then:
+                    - variables:
+                        direction: 1
+
+                - delay:
+                    seconds: "{{ transition }}"
+
+
+      # ==================================================
+      # COLOR TEMP
+      #
+      # 2700 → 6500 → 2700 → 6500 → ...
+      # ==================================================
+      - conditions:
+          - condition: trigger
+            id: "color_temp"
+        sequence:
+
+          - variables:
+              direction: 1
+
+          - repeat:
+
+              while:
+                - condition: template
+                  value_template: "{{ true }}"
+
+              sequence:
+
+                - variables:
+                    current_temp: >
+                      {{ state_attr(target_light, 'color_temp_kelvin') | int(min_temp) }}
+
+                    next_temp: >
+                      {% set value = current_temp + (color_temp_step_value * direction) %}
+                      {{ [value, min_temp] | max | min(max_temp) }}
+
+                - action: light.turn_on
+                  target: !input target_light
+                  data:
+                    color_temp_kelvin: "{{ next_temp }}"
+                    transition: "{{ transition }}"
+
+                - if:
+                    - condition: template
+                      value_template: "{{ next_temp >= max_temp }}"
+                  then:
+                    - variables:
+                        direction: -1
+
+                - if:
+                    - condition: template
+                      value_template: "{{ next_temp <= min_temp }}"
+                  then:
+                    - variables:
+                        direction: 1
+
+                - delay:
+                    seconds: "{{ transition }}"
+
+
+      # ==================================================
+      # STOP
+      # ==================================================
+      - conditions:
+          - condition: trigger
+            id: "stop"
+        sequence:
+          - stop: "Bouton relâché - arrêt de la variation"
